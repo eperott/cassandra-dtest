@@ -25,7 +25,9 @@ def generate_credentials(ip, cakeystore=None, cacert=None):
     import_cert(tmpdir, "ca", cacert, jkeystore)
     import_cert(tmpdir, name, cert, jkeystore)
 
-    return SecurityCredentials(jkeystore, cert, cakeystore, cacert)
+    key = exctract_pem_key(tmpdir, name, jkeystore)
+
+    return SecurityCredentials(jkeystore, key, cert, cakeystore, cacert)
 
 
 def generate_cakeypair(dir, name):
@@ -47,7 +49,7 @@ def generate_keypair(dir, name, cn, opts):
 
 
 def generate_cert(dir, name, keystore, opts=[]):
-    fn = os.path.join(dir, name + '.pem')
+    fn = os.path.join(dir, name + '.cert.pem')
     _exec_keytool(dir, keystore, ['-alias', name, '-exportcert', '-rfc', '-file', fn] + opts)
     return fn
 
@@ -59,7 +61,7 @@ def generate_sign_request(dir, name, keystore, opts=[]):
 
 
 def sign_request(dir, name, keystore, csr, opts=[]):
-    fnout = os.path.splitext(csr)[0] + '.pem'
+    fnout = os.path.splitext(csr)[0] + '.cert.pem'
     _exec_keytool(dir, keystore, ['-alias', name, '-keypass', 'cassandra', '-gencert',
                                   '-rfc', '-infile', csr, '-outfile', fnout] + opts)
     return fnout
@@ -70,21 +72,43 @@ def import_cert(dir, name, cert, keystore, opts=[]):
     return cert
 
 
+def exctract_pem_key(dir, name, keystore):
+    p12key = extract_p12_key(dir, name, keystore)
+    pemkey = _p12_to_pem(dir, name, p12key)
+    return pemkey
+
+def extract_p12_key(dir, name, keystore):
+    p12key = os.path.join(dir, name + '.key.p12')
+    args = ['keytool', '-importkeystore', '-srckeystore', keystore, '-srcstorepass', 'cassandra', '-srcalias', name, '-deststoretype', 'pkcs12', '-destkeystore', p12key, '-deststorepass', 'cassandra']
+    subprocess.check_call(args)
+    return p12key
+
 def _exec_keytool(dir, keystore, opts):
     args = ['keytool', '-keystore', keystore, '-storepass', 'cassandra', '-deststoretype', 'pkcs12'] + opts
     subprocess.check_call(args)
     return keystore
 
+def _p12_to_pem(dir, name, p12key):
+    passpemkey = os.path.join(dir, name + '.key.pass.pem')
+    args = ['openssl', 'pkcs12', '-in', p12key, '-passin', 'pass:cassandra', '-out', passpemkey, '-passout', 'pass:cassandra']
+    subprocess.check_call(args)
+
+    pemkey = os.path.join(dir, name + '.key.pem')
+    args = ['openssl', 'rsa', '-in', passpemkey, '-passin', 'pass:cassandra', '-out', pemkey]
+    subprocess.check_call(args)
+    return pemkey
+
 
 class SecurityCredentials():
 
-    def __init__(self, keystore, cert, cakeystore, cacert):
+    def __init__(self, keystore, key, cert, cakeystore, cacert):
         self.keystore = keystore
+        self.key = key
         self.cert = cert
         self.cakeystore = cakeystore
         self.cacert = cacert
         self.basedir = os.path.dirname(self.keystore)
 
     def __str__(self):
-        return "keystore: {}, cert: {}, cakeystore: {}, cacert: {}".format(
-               self.keystore, self.cert, self.cakeystore, self.cacert)
+        return "keystore: {}, key: {}, cert: {}, cakeystore: {}, cacert: {}".format(
+               self.keystore, self.key, self.cert, self.cakeystore, self.cacert)
